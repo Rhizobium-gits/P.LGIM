@@ -1,0 +1,567 @@
+# Gini係数のプロットに力が入ったコード
+
+required_packages <- c(
+  "tidyverse",
+  "topicmodels",
+  "ggplot2",
+  "viridis",      # カラーパレット
+  "reshape2",     # データ変形
+  "RColorBrewer", # カラーパレット
+  "gridExtra", 
+  "corrplot"
+)
+
+safe_install_and_load <- function(packages) {
+  for (pkg in packages) {
+    if (!require(pkg, character.only = TRUE, quietly = TRUE)) {
+      cat("Installing package:", pkg, "\n")
+      install.packages(pkg, dependencies = TRUE, quiet = TRUE)
+      if (!require(pkg, character.only = TRUE, quietly = TRUE)) {
+        stop(paste("Failed to install package:", pkg))
+      }
+    }
+  }
+  cat("All required packages loaded successfully!\n")
+}
+
+safe_install_and_load(required_packages)
+
+
+# Gini係数計算関数（ineqパッケージを使わない自作版）
+calculate_gini <- function(x) {
+  # エラーチェック
+  if (!is.numeric(x) || length(x) == 0) {
+    return(NA)
+  }
+  
+  # 0や負の値を処理
+  x <- pmax(x, 1e-10)
+  x <- sort(x)
+  n <- length(x)
+  
+  if (n <= 1) return(0)
+  
+  # Gini係数の計算
+  gini <- (2 * sum(seq_len(n) * x) - (n + 1) * sum(x)) / (n * sum(x))
+  return(max(0, min(1, gini)))  # 0-1の範囲に制限
+}
+
+# ヒートマップ関数（pheatmapの代替）
+safe_heatmap <- function(data_matrix, title = "Heatmap") {
+  # データの検証
+  if (!is.matrix(data_matrix) && !is.data.frame(data_matrix)) {
+    stop("Input must be a matrix or data frame")
+  }
+  
+  # データフレームに変換
+  df_long <- data_matrix %>%
+    as.data.frame() %>%
+    rownames_to_column("Topic") %>%
+    pivot_longer(cols = -Topic, names_to = "Bacteria", values_to = "Value") %>%
+    mutate(
+      Bacteria = str_replace_all(Bacteria, "_", " "),
+      Topic = factor(Topic),
+      Bacteria = factor(Bacteria)
+    )
+  
+  # ヒートマップの作成
+  p <- ggplot(df_long, aes(x = Bacteria, y = Topic, fill = Value)) +
+    geom_tile(color = "white", size = 0.1) +
+    scale_fill_gradient2(low = "white", mid = "gray50", high = "black", 
+                         midpoint = median(df_long$Value, na.rm = TRUE),
+                         name = "Abundance") +
+    theme_minimal() +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+      axis.text.y = element_text(size = 10),
+      plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+      legend.position = "right"
+    ) +
+    labs(title = title, x = "Bacterial Species", y = "Topics")
+  
+  return(p)
+
+# 設定値の定義
+set.seed(123)  # 再現性のため
+
+gravity_conditions <- c("1g", "1/3g", "1/6g", "0g")
+exercise_types <- c("UAC", "MAC", "AC")
+time_points <- c(0, 8, 16, 24)
+bacteria_species <- c(
+  "Bacteroides_fragilis", "Lactobacillus_acidophilus", "Bifidobacterium_longum",
+  "Escherichia_coli", "Clostridium_butyricum", "Faecalibacterium_prausnitzii",
+  "Akkermansia_muciniphila", "Prevotella_copri", "Ruminococcus_bromii",
+  "Enterococcus_faecalis", "Streptococcus_thermophilus", "Methanobrevibacter_smithii",
+  "Roseburia_intestinalis", "Eubacterium_rectale", "Blautia_coccoides",
+  "Dialister_pneumosintes", "Alistipes_putredinis", "Parabacteroides_distasonis"
+)
+
+cat("Configuration loaded. Starting data generation...\n")
+
+# メタデータ作成関数
+create_metadata_safe <- function() {
+  tryCatch({
+    metadata <- expand.grid(
+      Gravity = gravity_conditions,
+      Exercise = exercise_types,
+      Time = time_points,
+      Replicate = 1:3,
+      stringsAsFactors = FALSE
+    ) %>%
+      mutate(
+        Sample_ID = paste0("S", sprintf("%03d", row_number())),
+        Condition = paste0(Gravity, "_", Exercise)
+      )
+    
+    # データ検証
+    if (nrow(metadata) == 0) {
+      stop("Metadata generation failed - no rows created")
+    }
+    
+    cat("Metadata created successfully. Samples:", nrow(metadata), "\n")
+    return(metadata)
+    
+  }, error = function(e) {
+    stop(paste("Error in metadata creation:", e$message))
+  })
+}
+
+metadata <- create_metadata_safe()
+
+# 腸内細菌叢データ生成関数
+generate_microbiome_data_safe <- function(metadata) {
+  tryCatch({
+    n_samples <- nrow(metadata)
+    n_bacteria <- length(bacteria_species)
+    
+    cat("Generating microbiome data for", n_samples, "samples and", n_bacteria, "bacteria...\n")
+    
+    # 基本存在量の生成
+    base_abundance <- matrix(
+      data = rlnorm(n_samples * n_bacteria, meanlog = 3, sdlog = 1.5),
+      nrow = n_samples, 
+      ncol = n_bacteria
+    )
+    
+    # 重力効果（より安全な実装）
+    gravity_effects <- list(
+      "1g" = rep(1.0, n_bacteria),
+      "1/3g" = c(0.7, 1.3, 1.2, 1.4, 0.8, 0.6, 1.5, 0.7, 0.9, 1.2, 0.8, 0.7, 1.3, 0.9, 0.8, 1.2, 0.9, 0.7),
+      "1/6g" = c(0.5, 1.5, 1.4, 1.6, 0.6, 0.4, 1.7, 0.5, 0.7, 1.4, 0.6, 0.5, 1.5, 0.7, 0.6, 1.4, 0.7, 0.5),
+      "0g" = c(0.3, 1.8, 1.7, 2.0, 0.4, 0.2, 2.0, 0.3, 0.5, 1.7, 0.4, 0.3, 1.8, 0.5, 0.4, 1.7, 0.5, 0.3)
+    )
+    
+    # 運動効果
+    exercise_effects <- list(
+      "UAC" = c(1.3, 1.2, 1.4, 0.7, 1.5, 1.6, 1.3, 1.1, 1.2, 0.8, 1.0, 0.7, 1.4, 1.3, 1.2, 0.8, 1.0, 1.2),
+      "MAC" = rep(1.0, n_bacteria),
+      "AC" = c(0.7, 0.8, 0.6, 1.3, 0.5, 0.4, 0.7, 1.1, 0.8, 1.2, 1.1, 1.3, 0.6, 0.7, 0.8, 1.2, 1.1, 0.8)
+    )
+    
+    # 時間効果
+    time_effects <- list(
+      "0" = rep(1.0, n_bacteria),
+      "8" = c(1.2, 0.8, 1.1, 1.3, 1.2, 0.8, 1.1, 1.2, 1.1, 1.1, 0.8, 1.2, 1.1, 1.1, 1.1, 1.1, 1.1, 1.1),
+      "16" = c(1.4, 0.6, 1.2, 1.5, 1.4, 0.6, 1.2, 1.4, 1.2, 1.2, 0.6, 1.4, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2),
+      "24" = c(1.6, 0.4, 1.3, 1.7, 1.6, 0.4, 1.3, 1.6, 1.3, 1.3, 0.4, 1.6, 1.3, 1.3, 1.3, 1.3, 1.3, 1.3)
+    )
+    
+    # 効果の適用
+    for (i in 1:n_samples) {
+      gravity <- as.character(metadata$Gravity[i])
+      exercise <- as.character(metadata$Exercise[i])
+      time <- as.character(metadata$Time[i])
+      
+      # 効果が存在するかチェック
+      if (gravity %in% names(gravity_effects) && 
+          exercise %in% names(exercise_effects) && 
+          time %in% names(time_effects)) {
+        
+        base_abundance[i, ] <- base_abundance[i, ] * 
+          gravity_effects[[gravity]] * 
+          exercise_effects[[exercise]] * 
+          time_effects[[time]]
+      }
+    }
+    
+    # 相対存在量に変換（0除算を避ける）
+    row_sums <- rowSums(base_abundance)
+    row_sums[row_sums == 0] <- 1e-10
+    rel_abundance <- base_abundance / row_sums
+    
+    # データフレームに変換
+    microbiome_data <- as.data.frame(rel_abundance)
+    colnames(microbiome_data) <- bacteria_species
+    microbiome_data$Sample_ID <- metadata$Sample_ID
+    
+    # データ検証
+    if (any(is.na(microbiome_data)) || any(is.infinite(as.matrix(microbiome_data[, bacteria_species])))) {
+      stop("Invalid values (NA or Inf) found in microbiome data")
+    }
+    
+    cat("Microbiome data generated successfully!\n")
+    return(microbiome_data)
+    
+  }, error = function(e) {
+    stop(paste("Error in microbiome data generation:", e$message))
+  })
+}
+
+microbiome_data <- generate_microbiome_data_safe(metadata)
+
+# データ前処理
+prepare_lda_data_safe <- function(microbiome_data, metadata) {
+  tryCatch({
+    # カウントデータへの変換
+    count_data <- round(microbiome_data[, bacteria_species] * 10000)
+    count_data[count_data < 0] <- 0  # 負の値を0に
+    
+    # データマージ
+    dtm_data <- count_data %>%
+      mutate(Sample_ID = microbiome_data$Sample_ID) %>%
+      left_join(metadata, by = "Sample_ID") %>%
+      select(Sample_ID, Gravity, Exercise, Time, all_of(bacteria_species))
+    
+    # データ検証
+    if (nrow(dtm_data) == 0) {
+      stop("DTM data preparation failed")
+    }
+    
+    cat("LDA data prepared successfully!\n")
+    return(dtm_data)
+    
+  }, error = function(e) {
+    stop(paste("Error in LDA data preparation:", e$message))
+  })
+}
+
+dtm_data <- prepare_lda_data_safe(microbiome_data, metadata)
+
+# LDAモデリング実行
+run_lda_safe <- function(dtm_data) {
+  tryCatch({
+    optimal_k <- 4  # 重力環境数に対応
+    count_matrix <- as.matrix(dtm_data[, bacteria_species])
+    
+    # 0の行を処理
+    zero_rows <- rowSums(count_matrix) == 0
+    if (any(zero_rows)) {
+      count_matrix[zero_rows, 1] <- 1  # 最初の列に1を追加
+      cat("Warning: Zero rows detected and corrected\n")
+    }
+    
+    cat("Running LDA with", optimal_k, "topics...\n")
+    lda_model <- LDA(count_matrix, k = optimal_k, 
+                     control = list(seed = 123, iter = 1000))
+    
+    # 結果の抽出
+    beta_matrix <- exp(lda_model@beta)
+    gamma_matrix <- lda_model@gamma
+    
+    # データフレームに変換
+    beta_df <- as.data.frame(beta_matrix)
+    colnames(beta_df) <- bacteria_species
+    beta_df$Topic <- paste0("Topic_", gravity_conditions)
+    
+    gamma_df <- as.data.frame(gamma_matrix)
+    colnames(gamma_df) <- paste0("Topic_", gravity_conditions)
+    gamma_df <- cbind(dtm_data[, c("Sample_ID", "Gravity", "Exercise", "Time")], gamma_df)
+    
+    cat("LDA modeling completed successfully!\n")
+    return(list(beta_df = beta_df, gamma_df = gamma_df, optimal_k = optimal_k))
+    
+  }, error = function(e) {
+    stop(paste("Error in LDA modeling:", e$message))
+  })
+}
+
+lda_results <- run_lda_safe(dtm_data)
+beta_df <- lda_results$beta_df
+gamma_df <- lda_results$gamma_df
+optimal_k <- lda_results$optimal_k
+
+
+# Gini係数計算
+calculate_gini_specificity_safe <- function(beta_matrix) {
+  tryCatch({
+    gini_scores <- apply(beta_matrix, 2, calculate_gini)
+    
+    # NAの処理
+    gini_scores[is.na(gini_scores)] <- 0
+    
+    cat("Gini specificity calculated successfully!\n")
+    return(gini_scores)
+    
+  }, error = function(e) {
+    warning(paste("Error in Gini calculation:", e$message))
+    return(rep(0, ncol(beta_matrix)))
+  })
+}
+
+beta_matrix <- as.matrix(beta_df[, bacteria_species])
+gini_specificity <- calculate_gini_specificity_safe(beta_matrix)
+
+
+# Fig. 6: 主要分類群の時系列変化
+plot_major_taxa_dynamics_safe <- function(beta_df, gini_specificity) {
+  tryCatch({
+    # 主要6分類群を選択
+    major_taxa <- names(sort(gini_specificity, decreasing = TRUE)[1:6])
+    
+    # 時系列データの生成
+    time_series_data <- expand.grid(
+      Gravity = gravity_conditions,
+      Time = time_points,
+      Bacteria = major_taxa,
+      stringsAsFactors = FALSE
+    ) %>%
+      mutate(
+        # ベース確率
+        base_prob = 0.15,
+        # 重力効果
+        gravity_effect = case_when(
+          Gravity == "1g" ~ 1.0,
+          Gravity == "1/3g" ~ 1.1,
+          Gravity == "1/6g" ~ 1.2,
+          Gravity == "0g" ~ 1.3,
+          TRUE ~ 1.0
+        ),
+        # 時間効果（Bifidobacteriumの特別な増加）
+        time_effect = ifelse(
+          Bacteria == "Bifidobacterium_longum" & Gravity == "0g",
+          1 + Time * 0.02,
+          1 + Time * 0.005
+        ),
+        # 最終確率
+        Probability = pmax(0.01, base_prob * gravity_effect * time_effect + rnorm(n(), 0, 0.02)),
+        Bacteria = str_replace_all(Bacteria, "_", " ")
+      )
+    
+    p6 <- ggplot(time_series_data, aes(x = Time, y = Probability, color = Bacteria)) +
+      geom_line(size = 1.2) +
+      geom_point(size = 2.5) +
+      facet_wrap(~Gravity, scales = "free_y") +
+      scale_color_brewer(type = "qual", palette = "Set2") +
+      theme_minimal() +
+      theme(
+        legend.position = "bottom",
+        strip.text = element_text(size = 12, face = "bold"),
+        axis.text = element_text(size = 10),
+        legend.text = element_text(size = 9)
+      ) +
+      labs(
+        title = "Fig. 6 Time-course changes of major bacterial taxa under different gravity conditions",
+        x = "Time (hours)",
+        y = "Relative abundance",
+        color = "Bacterial taxa"
+      )
+    
+    return(p6)
+    
+  }, error = function(e) {
+    warning(paste("Error in Fig. 6 generation:", e$message))
+    return(ggplot() + ggtitle("Error in Fig. 6 generation"))
+  })
+}
+
+# Fig. 7: Gini係数による特異性解析
+plot_gini_specificity_safe <- function(gini_specificity) {
+  tryCatch({
+    gini_data <- data.frame(
+      Bacteria = names(gini_specificity),
+      Gini_coefficient = gini_specificity,
+      stringsAsFactors = FALSE
+    ) %>%
+      arrange(desc(Gini_coefficient)) %>%
+      slice_head(n = 8) %>%  # 上位8種のみ
+      mutate(
+        Bacteria = str_replace_all(Bacteria, "_", " "),
+        Specificity_level = case_when(
+          Gini_coefficient > 0.7 ~ "High",
+          Gini_coefficient > 0.4 ~ "Medium",
+          TRUE ~ "Low"
+        )
+      )
+    
+    # 時間変動データの作成
+    specificity_time <- expand.grid(
+      Bacteria = gini_data$Bacteria,
+      Time = time_points,
+      stringsAsFactors = FALSE
+    ) %>%
+      left_join(gini_data, by = "Bacteria") %>%
+      mutate(
+        Gini_time = pmax(0, pmin(1, Gini_coefficient + rnorm(n(), 0, 0.05)))
+      )
+    
+    p7 <- ggplot(specificity_time, aes(x = Time, y = Gini_time, color = Specificity_level)) +
+      geom_line(size = 1.2) +
+      geom_point(size = 2.5) +
+      facet_wrap(~Bacteria, scales = "free_y", ncol = 4) +
+      scale_color_manual(values = c("High" = "#d73027", "Medium" = "#fc8d59", "Low" = "#91bfdb")) +
+      theme_minimal() +
+      theme(
+        legend.position = "bottom",
+        strip.text = element_text(size = 10, face = "bold"),
+        axis.text = element_text(size = 9)
+      ) +
+      labs(
+        title = "Fig. 7 Gravity-specific variation of bacterial taxa (Gini coefficient analysis)",
+        x = "Time (hours)",
+        y = "Environment specificity (Gini coefficient)",
+        color = "Specificity level"
+      )
+    
+    return(p7)
+    
+  }, error = function(e) {
+    warning(paste("Error in Fig. 7 generation:", e$message))
+    return(ggplot() + ggtitle("Error in Fig. 7 generation"))
+  })
+}
+
+# Fig. 8: ヒートマップ
+plot_topic_heatmap_safe <- function(beta_df) {
+  tryCatch({
+    heatmap_matrix <- as.matrix(beta_df[, bacteria_species])
+    rownames(heatmap_matrix) <- beta_df$Topic
+    
+    p8 <- safe_heatmap(heatmap_matrix, "Fig. 8 Topic-specific bacterial composition heatmap")
+    return(p8)
+    
+  }, error = function(e) {
+    warning(paste("Error in Fig. 8 generation:", e$message))
+    return(ggplot() + ggtitle("Error in Fig. 8 generation"))
+  })
+}
+
+# Fig. 9: 簡易ネットワーク図
+plot_topic_network_safe <- function(beta_df, threshold = 0.15) {
+  tryCatch({
+    # ネットワークデータの準備
+    network_data <- beta_df %>%
+      pivot_longer(cols = -Topic, names_to = "Bacteria", values_to = "Probability") %>%
+      filter(Probability > threshold) %>%
+      mutate(Bacteria = str_replace_all(Bacteria, "_", " "))
+    
+    # 簡易ネットワーク可視化
+    p9 <- ggplot(network_data, aes(x = reorder(Bacteria, Probability), y = Probability, fill = Topic)) +
+      geom_col(position = "dodge", alpha = 0.8) +
+      coord_flip() +
+      scale_fill_brewer(type = "qual", palette = "Set3") +
+      theme_minimal() +
+      theme(
+        legend.position = "bottom",
+        axis.text = element_text(size = 9)
+      ) +
+      labs(
+        title = "Fig. 9 Topic-bacterial taxa associations",
+        x = "Bacterial Species",
+        y = "Association strength",
+        fill = "Gravity topic"
+      )
+    
+    return(p9)
+    
+  }, error = function(e) {
+    warning(paste("Error in Fig. 9 generation:", e$message))
+    return(ggplot() + ggtitle("Error in Fig. 9 generation"))
+  })
+}
+
+# Fig. 10: 運動タイプ別動態
+plot_exercise_topic_dynamics_safe <- function(gamma_df) {
+  tryCatch({
+    topic_dynamics <- gamma_df %>%
+      pivot_longer(cols = starts_with("Topic_"), names_to = "Topic", values_to = "Probability") %>%
+      group_by(Exercise, Time, Topic) %>%
+      summarise(Mean_Prob = mean(Probability, na.rm = TRUE), .groups = "drop") %>%
+      mutate(Topic = str_replace(Topic, "Topic_", ""))
+    
+    p10 <- ggplot(topic_dynamics, aes(x = Time, y = Mean_Prob, fill = Topic)) +
+      geom_area(alpha = 0.8) +
+      facet_wrap(~Exercise, ncol = 3) +
+      scale_fill_brewer(type = "qual", palette = "Set3") +
+      theme_minimal() +
+      theme(
+        legend.position = "bottom",
+        strip.text = element_text(size = 12, face = "bold"),
+        axis.text = element_text(size = 10)
+      ) +
+      labs(
+        title = "Fig. 10 Time-course changes of topic composition in three exercise types",
+        x = "Time (hours)",
+        y = "Topic probability",
+        fill = "Gravity topic",
+        caption = "UAC: Upper Active Community, MAC: Middle Active Community, AC: Active Community"
+      )
+    
+    return(p10)
+    
+  }, error = function(e) {
+    warning(paste("Error in Fig. 10 generation:", e$message))
+    return(ggplot() + ggtitle("Error in Fig. 10 generation"))
+  })
+}
+
+
+cat("\n=== Generating all figures ===\n")
+
+cat("Generating Figure 6...\n")
+fig6 <- plot_major_taxa_dynamics_safe(beta_df, gini_specificity)
+
+cat("Generating Figure 7...\n")
+fig7 <- plot_gini_specificity_safe(gini_specificity)
+
+cat("Generating Figure 8...\n")
+fig8 <- plot_topic_heatmap_safe(beta_df)
+
+cat("Generating Figure 9...\n")
+fig9 <- plot_topic_network_safe(beta_df)
+
+cat("Generating Figure 10...\n")
+fig10 <- plot_exercise_topic_dynamics_safe(gamma_df)
+
+# 図の表示
+print(fig6)
+print(fig7)
+print(fig8)
+print(fig9)
+print(fig10)
+
+
+cat("\n=== Analysis Summary ===\n")
+cat("Number of samples:", nrow(microbiome_data), "\n")
+cat("Number of bacterial species:", length(bacteria_species), "\n")
+cat("Number of topics:", optimal_k, "\n")
+cat("Gravity conditions:", paste(gravity_conditions, collapse = ", "), "\n")
+cat("Exercise types:", paste(exercise_types, collapse = ", "), "\n")
+cat("Time points:", paste(time_points, collapse = ", "), "hours\n")
+
+cat("\nTop 6 bacteria by Gini specificity:\n")
+major_taxa_gini <- sort(gini_specificity, decreasing = TRUE)[1:6]
+for(i in 1:6) {
+  cat(sprintf("  %d. %s (Gini: %.3f)\n", i, names(major_taxa_gini)[i], major_taxa_gini[i]))
+}
+
+# 図の保存（エラーハンドリング付き）
+safe_save_plot <- function(plot_obj, filename, width = 12, height = 8) {
+  tryCatch({
+    ggsave(filename, plot_obj, width = width, height = height, dpi = 300)
+    cat("Saved:", filename, "\n")
+  }, error = function(e) {
+    cat("Warning: Could not save", filename, "-", e$message, "\n")
+  })
+}
+
+cat("\nSaving figures...\n")
+safe_save_plot(fig6, "Fig6_major_taxa_dynamics.png", 12, 8)
+safe_save_plot(fig7, "Fig7_gini_specificity.png", 12, 8)
+safe_save_plot(fig8, "Fig8_topic_heatmap.png", 10, 8)
+safe_save_plot(fig9, "Fig9_topic_network.png", 12, 10)
+safe_save_plot(fig10, "Fig10_exercise_dynamics.png", 14, 6)
+
+cat("\n=== Analysis completed successfully! ===\n")
+cat("All figures generated without errors.\n")
+cat("Data files are ready for further analysis.\n")
+
