@@ -565,3 +565,717 @@ cat("\n=== Analysis completed successfully! ===\n")
 cat("All figures generated without errors.\n")
 cat("Data files are ready for further analysis.\n")
 
+
+
+
+
+
+
+# 重力効果ベクトルの数値的可視化
+# Numerical visualization of gravity effect vectors
+
+# 前提：gravity_effectsデータが計算済みであることを想定
+
+# ==============================================================================
+# 1. 重力効果ベクトルの数値処理
+# ==============================================================================
+
+# 重力効果の数値データを整理
+prepare_vector_data <- function(gravity_effects) {
+  
+  vector_data <- gravity_effects %>%
+    mutate(
+      # 重力レベルを数値化
+      Gravity_level = case_when(
+        Gravity == "1/3g" ~ 0.33,
+        Gravity == "1/6g" ~ 0.17,
+        Gravity == "0g" ~ 0.0
+      ),
+      # ベクトル成分を正規化
+      PC1_effect_norm = PC1_effect / max(abs(PC1_effect), na.rm = TRUE),
+      PC2_effect_norm = PC2_effect / max(abs(PC2_effect), na.rm = TRUE),
+      # 効果の方向を分類
+      Effect_direction = case_when(
+        PC1_effect > 0 & PC2_effect > 0 ~ "Positive-Positive",
+        PC1_effect > 0 & PC2_effect < 0 ~ "Positive-Negative", 
+        PC1_effect < 0 & PC2_effect > 0 ~ "Negative-Positive",
+        PC1_effect < 0 & PC2_effect < 0 ~ "Negative-Negative"
+      )
+    )
+  
+  return(vector_data)
+}
+
+# ==============================================================================
+# 2. オプション1: ベクトル大きさの棒グラフ（モノトーン）
+# ==============================================================================
+
+plot_vector_magnitude_bars <- function(vector_data) {
+  
+  p1 <- ggplot(vector_data, aes(x = Exercise, y = Effect_magnitude, fill = Gravity)) +
+    geom_col(position = "dodge", color = "black", size = 0.5, alpha = 0.8) +
+    geom_text(aes(label = round(Effect_magnitude, 3)), 
+              position = position_dodge(width = 0.9), 
+              vjust = -0.3, size = 3.5, fontface = "bold") +
+    scale_fill_grey(start = 0.8, end = 0.2, name = "Gravity") +
+    theme_minimal() +
+    theme(
+      panel.grid.major.x = element_blank(),
+      panel.grid.minor = element_blank(),
+      axis.text = element_text(size = 12, color = "black"),
+      axis.title = element_text(size = 14, face = "bold"),
+      legend.text = element_text(size = 12),
+      plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+      legend.position = "bottom"
+    ) +
+    labs(
+      title = "Gravity Effect Magnitude by Exercise Type",
+      x = "Exercise Type",
+      y = "Effect Magnitude (Ordination Distance)",
+      caption = "Values represent community displacement from 1g baseline"
+    )
+  
+  return(p1)
+}
+
+# ==============================================================================
+# 3. オプション2: PC成分分離表示（水平棒グラフ）
+# ==============================================================================
+
+plot_vector_components <- function(vector_data) {
+  
+  # データを縦長に変換
+  component_data <- vector_data %>%
+    select(Exercise, Gravity, PC1_effect, PC2_effect) %>%
+    pivot_longer(cols = c(PC1_effect, PC2_effect), 
+                 names_to = "Component", values_to = "Effect_value") %>%
+    mutate(
+      Component = case_when(
+        Component == "PC1_effect" ~ "PC1 Component",
+        Component == "PC2_effect" ~ "PC2 Component"
+      ),
+      # 正負で色分けのための変数
+      Effect_sign = ifelse(Effect_value >= 0, "Positive", "Negative"),
+      Condition = paste(Exercise, Gravity, sep = " - ")
+    )
+  
+  p2 <- ggplot(component_data, aes(x = reorder(Condition, Effect_value), y = Effect_value)) +
+    geom_col(aes(fill = Effect_sign), color = "black", size = 0.3, alpha = 0.7) +
+    geom_text(aes(label = round(Effect_value, 3)), 
+              hjust = ifelse(component_data$Effect_value >= 0, -0.1, 1.1),
+              size = 3, fontface = "bold") +
+    facet_wrap(~Component, scales = "free_x") +
+    coord_flip() +
+    scale_fill_manual(values = c("Positive" = "#636363", "Negative" = "#bdbdbd"),
+                      name = "Effect Direction") +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "red", alpha = 0.7) +
+    theme_minimal() +
+    theme(
+      panel.grid.major.y = element_blank(),
+      panel.grid.minor = element_blank(),
+      axis.text = element_text(size = 10, color = "black"),
+      axis.title = element_text(size = 12, face = "bold"),
+      strip.text = element_text(size = 12, face = "bold"),
+      plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+      legend.position = "bottom"
+    ) +
+    labs(
+      title = "PC Component Effects by Exercise Type and Gravity",
+      x = "Exercise Type - Gravity Condition",
+      y = "Effect Value",
+      caption = "Positive/negative values indicate direction of community shift"
+    )
+  
+  return(p2)
+}
+
+# ==============================================================================
+# 4. オプション3: 数値表付きドットプロット
+# ==============================================================================
+
+plot_vector_dot_table <- function(vector_data) {
+  
+  # 数値表示用のデータ準備
+  table_data <- vector_data %>%
+    select(Exercise, Gravity, PC1_effect, PC2_effect, Effect_magnitude, Effect_angle) %>%
+    mutate(
+      PC1_effect = round(PC1_effect, 4),
+      PC2_effect = round(PC2_effect, 4),
+      Effect_magnitude = round(Effect_magnitude, 4),
+      Effect_angle = round(Effect_angle, 1)
+    )
+  
+  p3 <- ggplot(vector_data, aes(x = Gravity_level, y = Effect_magnitude)) +
+    geom_point(aes(shape = Exercise), size = 6, color = "black", fill = "grey70", stroke = 1.5) +
+    geom_line(aes(group = Exercise, linetype = Exercise), color = "black", size = 1) +
+    geom_text(aes(label = paste0("(", round(PC1_effect, 3), ", ", round(PC2_effect, 3), ")")),
+              vjust = -1.5, hjust = 0.5, size = 3, fontface = "bold") +
+    scale_shape_manual(values = c("UAC" = 21, "MAC" = 22, "AC" = 24)) +
+    scale_linetype_manual(values = c("UAC" = "solid", "MAC" = "dashed", "AC" = "dotted")) +
+    scale_x_continuous(breaks = c(0, 0.17, 0.33), 
+                       labels = c("0g", "1/6g", "1/3g")) +
+    theme_minimal() +
+    theme(
+      panel.grid.minor = element_blank(),
+      axis.text = element_text(size = 12, color = "black"),
+      axis.title = element_text(size = 14, face = "bold"),
+      legend.text = element_text(size = 12),
+      plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+      legend.position = "bottom"
+    ) +
+    labs(
+      title = "Gravity Effect Vectors: Magnitude vs Gravity Level",
+      x = "Gravity Level",
+      y = "Effect Magnitude",
+      shape = "Exercise Type",
+      linetype = "Exercise Type",
+      caption = "Numbers in parentheses: (PC1 effect, PC2 effect)"
+    )
+  
+  return(p3)
+}
+
+# ==============================================================================
+# 5. オプション4: ヒートマップ式数値表示
+# ==============================================================================
+
+plot_vector_heatmap <- function(vector_data) {
+  
+  # ヒートマップ用データの準備
+  heatmap_data <- vector_data %>%
+    select(Exercise, Gravity, PC1_effect, PC2_effect, Effect_magnitude) %>%
+    pivot_longer(cols = c(PC1_effect, PC2_effect, Effect_magnitude),
+                 names_to = "Metric", values_to = "Value") %>%
+    mutate(
+      Metric = case_when(
+        Metric == "PC1_effect" ~ "PC1 Effect",
+        Metric == "PC2_effect" ~ "PC2 Effect",
+        Metric == "Effect_magnitude" ~ "Magnitude"
+      ),
+      Condition = paste(Exercise, Gravity, sep = "\n")
+    )
+  
+  p4 <- ggplot(heatmap_data, aes(x = Condition, y = Metric, fill = Value)) +
+    geom_tile(color = "white", size = 1) +
+    geom_text(aes(label = round(Value, 3)), size = 4, fontface = "bold") +
+    scale_fill_gradient2(low = "#d9d9d9", mid = "white", high = "#636363",
+                         midpoint = 0, name = "Effect\nValue") +
+    theme_minimal() +
+    theme(
+      axis.text.x = element_text(angle = 0, hjust = 0.5, size = 10),
+      axis.text.y = element_text(size = 12),
+      axis.title = element_text(size = 14, face = "bold"),
+      plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+      legend.position = "right",
+      panel.grid = element_blank()
+    ) +
+    labs(
+      title = "Gravity Effect Vector Components Matrix",
+      x = "Exercise Type - Gravity Condition",
+      y = "Vector Component",
+      caption = "Numerical values of community displacement vectors"
+    )
+  
+  return(p4)
+}
+
+# ==============================================================================
+# 6. オプション5: ミニマリスト数値プロット
+# ==============================================================================
+
+plot_minimalist_vectors <- function(vector_data) {
+  
+  p5 <- ggplot(vector_data, aes(x = Exercise, y = Gravity)) +
+    geom_point(aes(size = Effect_magnitude), shape = 21, 
+               fill = "grey50", color = "black", stroke = 1) +
+    geom_text(aes(label = round(Effect_magnitude, 3)), 
+              color = "white", fontface = "bold", size = 3.5) +
+    scale_size_continuous(range = c(10, 25), guide = "none") +
+    theme_void() +
+    theme(
+      axis.text = element_text(size = 12, color = "black", face = "bold"),
+      axis.title = element_text(size = 14, face = "bold"),
+      plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+      plot.margin = margin(20, 20, 20, 20)
+    ) +
+    labs(
+      title = "Gravity Effect Magnitude Matrix",
+      x = "Exercise Type",
+      y = "Gravity Condition"
+    )
+  
+  return(p5)
+}
+
+# ==============================================================================
+# 7. 数値要約テーブルの生成
+# ==============================================================================
+
+create_numerical_summary <- function(vector_data) {
+  
+  numerical_table <- vector_data %>%
+    select(Exercise, Gravity, PC1_effect, PC2_effect, Effect_magnitude, Effect_angle) %>%
+    arrange(Exercise, desc(Effect_magnitude)) %>%
+    mutate(
+      PC1_effect = round(PC1_effect, 4),
+      PC2_effect = round(PC2_effect, 4),
+      Effect_magnitude = round(Effect_magnitude, 4),
+      Effect_angle = round(Effect_angle, 1)
+    )
+  
+  return(numerical_table)
+}
+
+# ==============================================================================
+# 8. 全ての図を生成
+# ==============================================================================
+
+cat("Preparing gravity effect vector data for numerical visualization...\n")
+
+# データ準備（gravity_effectsが既に計算されていることを想定）
+vector_data <- prepare_vector_data(gravity_effects)
+
+cat("Generating numerical visualizations of gravity effect vectors...\n")
+
+# オプション1: 棒グラフ
+cat("Creating Option 1: Magnitude bar chart...\n")
+fig_option1 <- plot_vector_magnitude_bars(vector_data)
+print(fig_option1)
+
+# オプション2: 成分分離
+cat("Creating Option 2: Component separation...\n")
+fig_option2 <- plot_vector_components(vector_data)
+print(fig_option2)
+
+# オプション3: ドットプロット
+cat("Creating Option 3: Dot plot with values...\n")
+fig_option3 <- plot_vector_dot_table(vector_data)
+print(fig_option3)
+
+# オプション4: ヒートマップ
+cat("Creating Option 4: Heatmap matrix...\n")
+fig_option4 <- plot_vector_heatmap(vector_data)
+print(fig_option4)
+
+# オプション5: ミニマリスト
+cat("Creating Option 5: Minimalist plot...\n")
+fig_option5 <- plot_minimalist_vectors(vector_data)
+print(fig_option5)
+
+# 数値要約テーブル
+cat("Creating numerical summary table...\n")
+numerical_summary <- create_numerical_summary(vector_data)
+print(numerical_summary)
+
+cat("\n=== Gravity Effect Vector Analysis Summary ===\n")
+cat("Maximum effect magnitude:", max(vector_data$Effect_magnitude), "\n")
+cat("Minimum effect magnitude:", min(vector_data$Effect_magnitude), "\n")
+cat("Most affected condition:", 
+    with(vector_data, paste(Exercise[which.max(Effect_magnitude)], 
+                            Gravity[which.max(Effect_magnitude)])), "\n")
+cat("Least affected condition:", 
+    with(vector_data, paste(Exercise[which.min(Effect_magnitude)], 
+                            Gravity[which.min(Effect_magnitude)])), "\n")
+
+cat("\nNumerical gravity vector analysis completed!\n")
+
+
+
+
+# BALSAMICOを用いた重力環境が腸内細菌叢に与える影響解析
+# Gravity environment effects on gut microbiome using BALSAMICO
+
+# ==============================================================================
+# 1. BALSAMICOパッケージのインストールと読み込み
+# ==============================================================================
+
+# 必要なパッケージ
+if (!require("devtools", quietly = TRUE)) {
+  install.packages("devtools")
+}
+
+# BALSAMICOのインストール（初回のみ）
+if (!require("BALSAMICO", quietly = TRUE)) {
+  devtools::install_github("abikoushi/BALSAMICO")
+}
+
+library(BALSAMICO)
+library(tidyverse)
+library(ggplot2)
+library(viridis)
+library(pheatmap)
+
+# 前提：microbiome_data, metadataが既に読み込まれていることを想定
+
+# ==============================================================================
+# 2. BALSAMICOのための共変量行列設計
+# ==============================================================================
+
+# BALSAMICOに適した共変量行列の準備
+prepare_balsamico_data <- function(microbiome_data, metadata) {
+  
+  # カウントデータの準備（BALSAMICOは整数カウントが必要）
+  count_matrix <- microbiome_data %>%
+    select(all_of(bacteria_species)) %>%
+    mutate_all(~ round(. * 10000)) %>%  # 相対存在量を擬似カウントに変換
+    as.matrix()
+  
+  # サンプル順序の確認
+  sample_order <- microbiome_data$Sample_ID
+  metadata_ordered <- metadata[match(sample_order, metadata$Sample_ID), ]
+  
+  # 共変量行列の設計（重力環境を主要因子とする）
+  design_matrix <- metadata_ordered %>%
+    mutate(
+      # 重力レベルの数値化
+      Gravity_numeric = case_when(
+        Gravity == "1g" ~ 1.0,
+        Gravity == "1/3g" ~ 0.33,
+        Gravity == "1/6g" ~ 0.17,
+        Gravity == "0g" ~ 0.0
+      ),
+      # 運動タイプのダミー変数
+      Exercise_UAC = ifelse(Exercise == "UAC", 1, 0),
+      Exercise_MAC = ifelse(Exercise == "MAC", 1, 0),
+      # 時間の標準化
+      Time_scaled = scale(Time)[,1],
+      # 重力×時間の相互作用
+      Gravity_Time = Gravity_numeric * Time_scaled,
+      # 運動×重力の相互作用
+      Exercise_Gravity = Exercise_UAC * Gravity_numeric
+    )
+  
+  # モデル行列の作成
+  X <- model.matrix(~ Gravity_numeric + Exercise_UAC + Exercise_MAC + 
+                      Time_scaled + Gravity_Time + Exercise_Gravity, 
+                    data = design_matrix)
+  
+  # データ品質チェック
+  cat("Data dimensions:\n")
+  cat("- Samples:", nrow(count_matrix), "\n")
+  cat("- Bacteria:", ncol(count_matrix), "\n")
+  cat("- Covariates:", ncol(X), "\n")
+  cat("- Zero values:", sum(count_matrix == 0), "/", length(count_matrix), "\n")
+  
+  return(list(
+    Y = count_matrix,
+    X = X,
+    metadata = metadata_ordered,
+    design_info = design_matrix
+  ))
+}
+
+# ==============================================================================
+# 3. BALSAMICOによる階層的NMF解析
+# ==============================================================================
+
+# BALSAMICO解析の実行
+run_balsamico_analysis <- function(balsamico_data, L = 5) {
+  
+  cat("Running BALSAMICO hierarchical NMF analysis...\n")
+  cat("Number of latent factors (L):", L, "\n")
+  
+  # VNMF（Variational Non-negative Matrix Factorization）の実行
+  tryCatch({
+    balsamico_result <- VNMF(
+      Y = balsamico_data$Y,          # カウント行列
+      X = balsamico_data$X,          # 共変量行列
+      L = L,                         # 潜在因子数
+      tau = 10000,                   # スケールパラメータ
+      maxit = 50000,                 # 最大反復数
+      verbose = TRUE
+    )
+    
+    cat("BALSAMICO analysis completed successfully!\n")
+    
+    # 標準誤差の計算
+    cat("Calculating standard errors...\n")
+    se_result <- se_VNMF(balsamico_result)
+    
+    return(list(
+      model = balsamico_result,
+      standard_errors = se_result,
+      data = balsamico_data
+    ))
+    
+  }, error = function(e) {
+    cat("Error in BALSAMICO analysis:", e$message, "\n")
+    return(NULL)
+  })
+}
+
+# ==============================================================================
+# 4. 重力効果の抽出と解釈
+# ==============================================================================
+
+# 重力効果係数の抽出
+extract_gravity_effects <- function(balsamico_result) {
+  
+  if (is.null(balsamico_result)) {
+    cat("No valid BALSAMICO result provided.\n")
+    return(NULL)
+  }
+  
+  # V行列から重力効果を抽出
+  V_matrix <- balsamico_result$model$V
+  X_names <- colnames(balsamico_result$data$X)
+  
+  # 重力関連の係数
+  gravity_indices <- grep("Gravity", X_names)
+  gravity_effects <- V_matrix[gravity_indices, , drop = FALSE]
+  rownames(gravity_effects) <- X_names[gravity_indices]
+  
+  # 効果サイズの計算
+  gravity_summary <- data.frame(
+    Covariate = X_names[gravity_indices],
+    Effect_L1 = gravity_effects[, 1],
+    Effect_L2 = gravity_effects[, 2],
+    Effect_L3 = gravity_effects[, 3],
+    Effect_magnitude = sqrt(rowSums(gravity_effects^2))
+  )
+  
+  return(list(
+    effects_matrix = gravity_effects,
+    summary = gravity_summary
+  ))
+}
+
+# ==============================================================================
+# 5. 潜在因子の生物学的解釈
+# ==============================================================================
+
+# 潜在因子と細菌種の関連解析
+analyze_latent_factors <- function(balsamico_result) {
+  
+  if (is.null(balsamico_result)) return(NULL)
+  
+  # H行列（潜在因子と細菌の関連）
+  H_matrix <- balsamico_result$model$H
+  colnames(H_matrix) <- bacteria_species
+  
+  # 各潜在因子の主要細菌種を同定
+  factor_interpretation <- data.frame()
+  
+  for (l in 1:nrow(H_matrix)) {
+    top_bacteria <- order(H_matrix[l, ], decreasing = TRUE)[1:5]
+    top_values <- H_matrix[l, top_bacteria]
+    
+    factor_info <- data.frame(
+      Factor = paste0("L", l),
+      Rank = 1:5,
+      Bacteria = bacteria_species[top_bacteria],
+      Weight = top_values,
+      Relative_weight = top_values / sum(H_matrix[l, ])
+    )
+    
+    factor_interpretation <- rbind(factor_interpretation, factor_info)
+  }
+  
+  return(list(
+    H_matrix = H_matrix,
+    interpretation = factor_interpretation
+  ))
+}
+
+# ==============================================================================
+# 6. 可視化関数群
+# ==============================================================================
+
+# 重力効果のヒートマップ
+plot_gravity_effects_heatmap <- function(gravity_effects) {
+  
+  if (is.null(gravity_effects)) return(NULL)
+  
+  effects_matrix <- gravity_effects$effects_matrix
+  
+  # ヒートマップの作成
+  pheatmap(
+    effects_matrix,
+    cluster_rows = FALSE,
+    cluster_cols = TRUE,
+    color = colorRampPalette(c("blue", "white", "red"))(100),
+    main = "Gravity Effects on Latent Factors (BALSAMICO)",
+    fontsize = 12,
+    cellwidth = 30,
+    cellheight = 20
+  )
+}
+
+# 潜在因子の解釈可視化
+plot_factor_interpretation <- function(factor_analysis) {
+  
+  if (is.null(factor_analysis)) return(NULL)
+  
+  interpretation_data <- factor_analysis$interpretation %>%
+    filter(Rank <= 3)  # 上位3種のみ表示
+  
+  p <- ggplot(interpretation_data, aes(x = Factor, y = Relative_weight, fill = Bacteria)) +
+    geom_col(position = "stack", color = "white", size = 0.5) +
+    scale_fill_viridis_d(option = "plasma") +
+    theme_minimal() +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      legend.position = "bottom",
+      plot.title = element_text(size = 14, face = "bold")
+    ) +
+    labs(
+      title = "Latent Factor Composition (Top 3 Bacteria per Factor)",
+      x = "Latent Factor",
+      y = "Relative Weight",
+      fill = "Bacterial Species"
+    )
+  
+  return(p)
+}
+
+# 予測vs観測値のプロット
+plot_prediction_accuracy <- function(balsamico_result) {
+  
+  if (is.null(balsamico_result)) return(NULL)
+  
+  # 予測値の計算
+  predicted <- balsamico_result$model$W %*% balsamico_result$model$H
+  observed <- balsamico_result$data$Y
+  
+  # データフレームに変換
+  pred_obs_data <- data.frame(
+    Predicted = as.vector(predicted),
+    Observed = as.vector(observed)
+  )
+  
+  # 相関係数の計算
+  correlation <- cor(pred_obs_data$Predicted, pred_obs_data$Observed)
+  
+  p <- ggplot(pred_obs_data, aes(x = Predicted, y = Observed)) +
+    geom_point(alpha = 0.5, size = 1) +
+    geom_abline(intercept = 0, slope = 1, color = "red", linetype = "dashed") +
+    geom_smooth(method = "lm", color = "blue", se = TRUE) +
+    theme_minimal() +
+    labs(
+      title = paste0("BALSAMICO Model Fit (r = ", round(correlation, 3), ")"),
+      x = "Predicted Values",
+      y = "Observed Values",
+      caption = "Red line: perfect prediction; Blue line: actual fit"
+    )
+  
+  return(p)
+}
+
+# ==============================================================================
+# 7. 統合解析の実行
+# ==============================================================================
+
+cat("=== BALSAMICO Analysis for Gravity Effects on Gut Microbiome ===\n")
+
+# データ準備
+cat("\n1. Preparing data for BALSAMICO...\n")
+balsamico_data <- prepare_balsamico_data(microbiome_data, metadata)
+
+# BALSAMICO解析実行
+cat("\n2. Running BALSAMICO hierarchical NMF...\n")
+balsamico_result <- run_balsamico_analysis(balsamico_data, L = 5)
+
+if (!is.null(balsamico_result)) {
+  
+  # 重力効果の抽出
+  cat("\n3. Extracting gravity effects...\n")
+  gravity_effects <- extract_gravity_effects(balsamico_result)
+  
+  # 潜在因子の解釈
+  cat("\n4. Analyzing latent factors...\n")
+  factor_analysis <- analyze_latent_factors(balsamico_result)
+  
+  # 結果の表示
+  cat("\n=== BALSAMICO Results Summary ===\n")
+  if (!is.null(gravity_effects)) {
+    print(gravity_effects$summary)
+  }
+  
+  if (!is.null(factor_analysis)) {
+    cat("\nTop bacteria per latent factor:\n")
+    print(factor_analysis$interpretation %>% filter(Rank == 1))
+  }
+  
+  # 可視化
+  cat("\n5. Generating visualizations...\n")
+  
+  # 重力効果ヒートマップ
+  if (!is.null(gravity_effects)) {
+    plot_gravity_effects_heatmap(gravity_effects)
+  }
+  
+  # 因子解釈プロット
+  if (!is.null(factor_analysis)) {
+    fig_factors <- plot_factor_interpretation(factor_analysis)
+    print(fig_factors)
+  }
+  
+  # モデルフィットプロット
+  fig_fit <- plot_prediction_accuracy(balsamico_result)
+  print(fig_fit)
+  
+  cat("\n=== BALSAMICO Analysis Completed Successfully! ===\n")
+  
+} else {
+  cat("\nBALSAMICO analysis failed. Please check data quality and parameters.\n")
+}
+
+# ==============================================================================
+# 8. 結果の解釈と応用
+# ==============================================================================
+
+cat("\n=== Biological Interpretation ===\n")
+cat("BALSAMICO provides several key advantages for gravity microbiome research:\n")
+cat("1. Hierarchical factorization captures complex gravity-microbiome relationships\n")
+cat("2. Incorporation of clinical covariates (gravity, exercise, time)\n")
+cat("3. Bayesian framework provides uncertainty quantification\n")
+cat("4. Latent factors represent biologically meaningful microbial modules\n")
+cat("5. Non-negative constraints ensure interpretable factor loadings\n")
+
+cat("\n=== Potential Applications ===\n")
+cat("1. Identification of gravity-sensitive microbial modules\n")
+cat("2. Prediction of microbiome states under different gravity conditions\n")
+cat("3. Personalized risk assessment for space missions\n")
+cat("4. Development of targeted interventions based on latent factors\n")
+cat("5. Discovery of exercise-gravity interaction effects\n")
+
+# パラメータ最適化のための関数
+optimize_balsamico_parameters <- function(balsamico_data, L_range = 3:8) {
+  
+  cat("Optimizing number of latent factors...\n")
+  
+  results <- list()
+  aic_values <- numeric(length(L_range))
+  
+  for (i in seq_along(L_range)) {
+    L <- L_range[i]
+    cat("Testing L =", L, "...\n")
+    
+    result <- run_balsamico_analysis(balsamico_data, L = L)
+    
+    if (!is.null(result)) {
+      # AIC的な情報量基準の計算（簡易版）
+      predicted <- result$model$W %*% result$model$H
+      mse <- mean((balsamico_data$Y - predicted)^2)
+      n_params <- L * (nrow(balsamico_data$Y) + ncol(balsamico_data$Y))
+      aic_values[i] <- log(mse) + 2 * n_params / length(balsamico_data$Y)
+      
+      results[[as.character(L)]] <- result
+    } else {
+      aic_values[i] <- Inf
+    }
+  }
+  
+  optimal_L <- L_range[which.min(aic_values)]
+  cat("Optimal number of latent factors:", optimal_L, "\n")
+  
+  return(list(
+    optimal_L = optimal_L,
+    optimal_result = results[[as.character(optimal_L)]],
+    aic_values = aic_values,
+    L_range = L_range
+  ))
+}
+
+cat("\nBALSAMICO analysis framework ready for gravity microbiome research!\n")
+
